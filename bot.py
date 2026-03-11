@@ -1,101 +1,54 @@
-import os
-import anthropic
+import requests
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
+TELEGRAM_TOKEN = "8690782724:AAEmcspxm2RqioaD-zBqgzwqi40Jg-sjwxA"
+ANTHROPIC_API_KEY = "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"
 
-client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-
-SYSTEM_PROMPT = """Ты — профессиональный Suno AI агент и музыкальный продюсер. Помогаешь пользователю:
-
-1. ПРОМТЫ ДЛЯ SUNO — создаёшь style tags на английском для генерации музыки
-   Формат: жанр, настроение, инструменты, темп, вокал через запятую
-   Пример: "dreamy indie pop, melancholic female vocals, jangly guitar, lo-fi, 90s aesthetic"
-
-2. SUNO STUDIO — пишешь полные промты со структурными тегами:
-   [Intro], [Verse], [Pre-chorus], [Chorus], [Bridge], [Outro]
-   [Guitar solo], [Beat drop], [Whispered], [Build up]
-
-3. ТЕКСТЫ ПЕСЕН — пишешь тексты на русском или английском с разметкой структуры
-
-4. АРАНЖИРОВКИ — советуешь инструментовку, динамику, слои звука
-
-Всегда выдавай готовый промт отдельным блоком для удобного копирования.
-Отвечай на русском языке если не просят иначе."""
+SYSTEM_PROMPT = "Ты профессиональный Suno AI агент. Помогаешь: 1) создавать style tags промты для Suno на английском 2) писать промты для Suno Studio с тегами [Verse][Chorus][Bridge] 3) писать тексты песен 4) советовать аранжировки. Отвечай на русском."
 
 user_histories = {}
 
+def ask_claude(messages):
+    r = requests.post("https://api.anthropic.com/v1/messages",
+        headers={"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+        json={"model": "claude-sonnet-4-20250514", "max_tokens": 1000, "system": SYSTEM_PROMPT, "messages": messages})
+    return r.json()["content"][0]["text"]
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🎵 *Привет! Я твой Suno AI агент*\n\n"
-        "Помогу тебе создавать музыку в Suno:\n\n"
-        "🎵 /song — промт для песни\n"
-        "🎛 /studio — промт для Suno Studio\n"
-        "✍️ /lyrics — написать текст песни\n"
-        "🎼 /arrangement — советы по аранжировке\n"
-        "🗑 /clear — очистить историю чата\n\n"
-        "Или просто напиши что хочешь создать!",
-        parse_mode="Markdown"
-    )
+    await update.message.reply_text("🎵 Привет! Я твой Suno AI агент\n\n🎵 /song — промт для песни\n🎛 /studio — Suno Studio\n✍️ /lyrics — текст песни\n🎼 /arrangement — аранжировка\n🗑 /clear — очистить историю")
 
 async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user_histories[user_id] = []
-    await update.message.reply_text("🗑 История очищена! Начнём заново.")
-
-async def set_mode(update: Update, context: ContextTypes.DEFAULT_TYPE, mode_text: str):
-    user_id = update.effective_user.id
-    user_histories[user_id] = []
-    await handle_message_with_text(update, context, mode_text)
+    user_histories[update.effective_user.id] = []
+    await update.message.reply_text("🗑 Очищено!")
 
 async def song_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🎵 Режим: *Промт для Suno*\nОпиши какую песню хочешь создать — жанр, настроение, тему:", parse_mode="Markdown")
+    await update.message.reply_text("🎵 Опиши песню — жанр, настроение, тему:")
 
 async def studio_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🎛 Режим: *Suno Studio*\nОпиши песню и я создам полную структуру с тегами [Verse][Chorus] и текстом:", parse_mode="Markdown")
+    await update.message.reply_text("🎛 Опиши песню для Suno Studio:")
 
 async def lyrics_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✍️ Режим: *Текст песни*\nОпиши о чём должна быть песня, жанр и язык:", parse_mode="Markdown")
+    await update.message.reply_text("✍️ О чём песня? Жанр и язык:")
 
 async def arrangement_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🎼 Режим: *Аранжировка*\nОпиши свою идею и я помогу с инструментовкой и звуком:", parse_mode="Markdown")
+    await update.message.reply_text("🎼 Опиши идею для аранжировки:")
 
-async def handle_message_with_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id not in user_histories:
         user_histories[user_id] = []
-
-    user_histories[user_id].append({"role": "user", "content": text})
-
-    thinking_msg = await update.message.reply_text("🎵 Создаю...")
-
+    user_histories[user_id].append({"role": "user", "content": update.message.text})
+    msg = await update.message.reply_text("🎵 Создаю...")
     try:
-        response = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=1000,
-            system=SYSTEM_PROMPT,
-            messages=user_histories[user_id]
-        )
-        reply = response.content[0].text
+        reply = ask_claude(user_histories[user_id])
         user_histories[user_id].append({"role": "assistant", "content": reply})
-
-        await thinking_msg.delete()
-
-        if len(reply) > 4000:
-            parts = [reply[i:i+4000] for i in range(0, len(reply), 4000)]
-            for part in parts:
-                await update.message.reply_text(part)
-        else:
-            await update.message.reply_text(reply)
-
+        await msg.delete()
+        for i in range(0, len(reply), 4000):
+            await update.message.reply_text(reply[i:i+4000])
     except Exception as e:
-        await thinking_msg.delete()
-        await update.message.reply_text(f"❌ Ошибка: {str(e)}")
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await handle_message_with_text(update, context, update.message.text)
+        await msg.delete()
+        await update.message.reply_text(f"Ошибка: {str(e)}")
 
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
